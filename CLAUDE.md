@@ -113,3 +113,25 @@ Quando o usuário pedir skill nova:
 4. Se a skill precisar de arquivos de apoio (templates, exemplos),
    criar dentro da pasta da skill
 5. Seguir o fluxo da skill-creator nativa do Claude Code
+
+---
+
+## Atualização do sistema (clientes)
+
+Cada cliente do Sabec/Os é um clone com brand, dados e memória próprios.
+O sistema central evolui em `github.com/DiogoSabec/sabec-os`. Pra puxar
+melhorias do sistema central pra dentro de um cliente sem sobrescrever o
+que é dele, o cliente roda `/atualizar-sistema`.
+
+A skill `atualizar-sistema` puxa apenas arquivos da whitelist (server,
+UI, launchers, skills, templates, partes genéricas de `package.json` e
+`CLAUDE.md`) e nunca toca em `brand.config.js`, `_memoria/`,
+`identidade/`, `REFERENCIAS/`, `marketing/`, `saidas/`, `dados/`,
+`pacientes/`, `clientes/`.
+
+**Convenção do `CLAUDE.md`:** esse arquivo termina com `---` (três
+hífens em linha isolada) como marcador de fim do bloco genérico do
+sistema. O cliente acrescenta customizações abaixo desse separador.
+`/atualizar-sistema` preserva tudo o que estiver depois do último `---`.
+
+---
