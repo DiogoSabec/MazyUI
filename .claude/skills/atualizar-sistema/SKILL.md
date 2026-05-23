@@ -102,8 +102,6 @@ Arquivos individuais:
 
 - `mazyui-server.mjs`
 - `mazyui-ui.html`
-- `mazyui-ui.css`
-- `mazyui-ui.js`
 - `Abrir MazyUI.command`
 - `Abrir MazyUI.bat`
 - `.gitignore`
@@ -111,6 +109,7 @@ Arquivos individuais:
 Pastas (full sync — copia tudo, com merge especial pra skills):
 
 - `templates/`
+- `mazyui-ui/` — sync com `--delete` (system-owned; cliente não deve colocar arquivos aqui)
 - `.claude/skills/`
 
 Arquivos com merge especial (regras abaixo):
@@ -155,19 +154,22 @@ NUNCA copia nem sobrescreve:
 **Importante:** `local-routes.mjs`, `local-ui.js` e `local-ui.css` são
 o contrato de extensão do MazyUI. Cliente coloca rotas, painéis e
 overrides de tema nesses arquivos pra que `mazyui-server.mjs` e
-`sabec-ui.*` (os arquivos do sistema) possam ser atualizados livremente
+`mazyui-ui.*` (os arquivos do sistema) possam ser atualizados livremente
 sem perder customizações. Se você for editar `mazyui-server.mjs` ou
 `mazyui-ui.html` "só pra adicionar uma coisinha" — pare. Mova pra
 `local-*` antes que o próximo sync apague.
 
 ### UI-fork (cliente com UI customizada por dentro)
 
-Caso especial: cliente que customizou `mazyui-ui.html/css/js` direto
+Caso especial: cliente que customizou arquivos de UI do sistema direto
 (fora do contrato `local-*`) e não pode mais receber atualizações
 desses arquivos. Pra marcar, o cliente cria um arquivo `.ui-fork` na
-raiz. Se ele existir, o sync **pula completamente** `mazyui-ui.html`,
-`mazyui-ui.css` e `mazyui-ui.js` — todo o resto (server, skills,
-templates, CLAUDE.md, launchers) flui normal.
+raiz. Se ele existir, o sync **pula completamente**:
+
+- `mazyui-ui.html`
+- A pasta inteira `mazyui-ui/` (todos os módulos, vendor, styles)
+
+Todo o resto (server, skills, templates, CLAUDE.md, launchers) flui normal.
 
 Detecção:
 
@@ -176,12 +178,22 @@ UI_FORK=0
 [ -f ./.ui-fork ] && UI_FORK=1
 ```
 
-Em todas as fases (4, 5, 6.1, 6.5), tratar os 3 arquivos UI como
-"ignorados" quando `UI_FORK=1`. Mostrar no resumo da Fase 5:
+Em todas as fases (4, 5, 6.1, 6.2, 6.5), tratar `mazyui-ui.html` e
+`mazyui-ui/` como "ignorados" quando `UI_FORK=1`. Mostrar no resumo da
+Fase 5:
 
 ```
-  UI-fork detectado (.ui-fork) — pulando sabec-ui.{html,css,js}
+  UI-fork detectado (.ui-fork) — pulando mazyui-ui.html e mazyui-ui/
 ```
+
+**Sair do fork:** pra um cliente voltar a receber atualizações normais
+de UI, o processo é:
+
+1. Apagar `.ui-fork` da raiz.
+2. Deletar manualmente os arquivos legacy `mazyui-ui.css` e `mazyui-ui.js`
+   da raiz (se ainda existirem de antes do refactor modular).
+3. Rodar `/atualizar-sistema` → o sync materializa `mazyui-ui/` (pasta
+   modular) + `mazyui-ui.html` atualizado no cliente.
 
 ## Fase 4 — Detecta mudanças
 
@@ -271,10 +283,8 @@ Só roda se o usuário disser [s].
 cp "$TMP_DIR/mazyui-server.mjs" ./mazyui-server.mjs
 if [ ! -f ./.ui-fork ]; then
   cp "$TMP_DIR/mazyui-ui.html" ./mazyui-ui.html
-  cp "$TMP_DIR/mazyui-ui.css"  ./mazyui-ui.css
-  cp "$TMP_DIR/mazyui-ui.js"   ./mazyui-ui.js
 else
-  echo "  ⊘ .ui-fork detectado — sabec-ui.{html,css,js} preservados"
+  echo "  ⊘ .ui-fork detectado — mazyui-ui.html e mazyui-ui/ preservados"
 fi
 cp "$TMP_DIR/Abrir MazyUI.command" "./Abrir MazyUI.command"
 cp "$TMP_DIR/Abrir MazyUI.bat" "./Abrir MazyUI.bat"
@@ -288,13 +298,22 @@ upstream antes), AVISA antes de sobrescrever:
 > "O arquivo `<x>` foi modificado manualmente no cliente. Sobrescrever
 >  com a versão do sabec-os? Detalhe do diff: [...] [s/n]"
 
-### 6.2 — Pastas (templates/, .claude/skills/)
+### 6.2 — Pastas (templates/, mazyui-ui/, .claude/skills/)
 
 Pra `templates/`: pode usar `rsync` com `--delete` cuidadoso, ou apenas
 copiar over. Solução simples:
 
 ```bash
 rsync -a --delete "$TMP_DIR/templates/" ./templates/
+```
+
+Pra `mazyui-ui/`: system-owned, usa `--delete` pra garantir que módulos
+removidos do central não fiquem no cliente:
+
+```bash
+if [ ! -f ./.ui-fork ]; then
+  rsync -a --delete "$TMP_DIR/mazyui-ui/" ./mazyui-ui/
+fi
 ```
 
 Pra `.claude/skills/`: NÃO usa `--delete` global (pra preservar skills
@@ -452,17 +471,22 @@ Antes de commitar, confere duas invariantes:
 ```bash
 SYS_FILES=(mazyui-server.mjs)
 if [ ! -f ./.ui-fork ]; then
-  SYS_FILES+=(mazyui-ui.html mazyui-ui.css mazyui-ui.js)
+  SYS_FILES+=(mazyui-ui.html)
 fi
 for f in "${SYS_FILES[@]}"; do
   diff -q "$TMP_DIR/$f" "./$f" && \
     echo "  ✓ $f = central" || echo "  ✗ $f DIVERGE"
 done
+# verifica pasta mazyui-ui/ (só se não for ui-fork)
+if [ ! -f ./.ui-fork ]; then
+  diff -rq "$TMP_DIR/mazyui-ui/" ./mazyui-ui/ && \
+    echo "  ✓ mazyui-ui/ = central" || echo "  ✗ mazyui-ui/ DIVERGE"
+fi
 ```
 
 Se algum diverge, é bug do sync — reporta e não commita. Quando
-`.ui-fork` está presente, os 3 arquivos UI são propositalmente
-divergentes e ficam fora dessa verificação.
+`.ui-fork` está presente, `mazyui-ui.html` e `mazyui-ui/` são
+propositalmente divergentes e ficam fora dessa verificação.
 
 ### 2. `local-routes.mjs` e `local-ui.js` continuam intactos
 
@@ -488,6 +512,28 @@ LOCAL_UI_HASH_AFTER=$(test -f ./local-ui.js && shasum -a 256 ./local-ui.js | awk
 Se algum hash mudou, é bug do sync — reporta, NÃO commita, e instrui o
 usuário a fazer `git checkout -- local-routes.mjs local-ui.js` pra
 recuperar.
+
+## Fase 6.6 — Limpeza de órfãos legacy UI
+
+Se `.ui-fork` NÃO existe no cliente E o `$TMP_DIR` (central) NÃO contém
+mais `mazyui-ui.css` ou `mazyui-ui.js`, remover esses arquivos do cliente
+(são resquícios do layout monolítico anterior ao refactor modular):
+
+```bash
+if [ ! -f ./.ui-fork ]; then
+  if [ ! -f "$TMP_DIR/mazyui-ui.css" ] && [ -f ./mazyui-ui.css ]; then
+    rm ./mazyui-ui.css
+    echo "  removendo órfão legacy: mazyui-ui.css"
+  fi
+  if [ ! -f "$TMP_DIR/mazyui-ui.js" ] && [ -f ./mazyui-ui.js ]; then
+    rm ./mazyui-ui.js
+    echo "  removendo órfão legacy: mazyui-ui.js"
+  fi
+fi
+```
+
+Clientes com `.ui-fork` presente mantêm os arquivos legacy
+indefinidamente — responsabilidade deles. Não remover nesses casos.
 
 ## Fase 7 — Commit
 

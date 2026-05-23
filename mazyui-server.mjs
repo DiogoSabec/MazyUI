@@ -939,8 +939,9 @@ async function handleUpload(req, res) {
 
 // ============================================================
 // Roteamento — tabela única que internas e extensões populam
-// Match por (método, path) exato; primeira ocorrência ganha, então
-// internas (registradas primeiro) não podem ser sobrescritas por extensão.
+// Match por (método, path) exato ou por prefixo wildcard (path termina em
+// "/*"). Primeira ocorrência ganha; internas registradas antes não podem
+// ser sobrescritas pela extensão local.
 // ============================================================
 const routes = [];
 
@@ -948,7 +949,9 @@ function addRoute(method, p, handler) {
   if (typeof method !== 'string' || typeof p !== 'string' || typeof handler !== 'function') {
     throw new Error('addRoute(method, path, handler): tipos inválidos');
   }
-  routes.push({ method: method.toUpperCase(), path: p, handler });
+  const wildcard = p.endsWith('/*');
+  const prefix   = wildcard ? p.slice(0, -1) : null; // '/mazyui-ui/' para '/mazyui-ui/*'
+  routes.push({ method: method.toUpperCase(), path: p, prefix, wildcard, handler });
 }
 
 function handleRoot(req, res) {
@@ -959,27 +962,44 @@ function handleRoot(req, res) {
   res.end(html);
 }
 
-// CSS é estático (sem placeholders). Servido em streaming.
-function handleUiCss(req, res) {
-  const file = path.join(ROOT, 'mazyui-ui.css');
-  if (!fs.existsSync(file)) return text(res, 404, 'mazyui-ui.css não encontrado');
-  res.writeHead(200, {
-    'Content-Type': 'text/css; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  fs.createReadStream(file).pipe(res);
+// ── Legacy endpoints: aposentados na Onda 2 (modular-ui-litHtml) ──────────
+// A UI foi modularizada em /mazyui-ui/. Estes paths não existem mais.
+const LEGACY_GONE_BODY =
+  '410 Gone — Este endpoint foi descontinuado. A UI foi modularizada em /mazyui-ui/. Recarregue a página com Ctrl+Shift+R.';
+
+function handleLegacyGone(req, res) {
+  res.writeHead(410, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(LEGACY_GONE_BODY);
 }
 
-// JS tem placeholders {{BRAND_*}}, então aplica renderBrand igual ao HTML.
-function handleUiJs(req, res) {
-  const file = path.join(ROOT, 'mazyui-ui.js');
-  if (!fs.existsSync(file)) return text(res, 404, 'mazyui-ui.js não encontrado');
-  const js = renderBrand(fs.readFileSync(file, 'utf8'));
-  res.writeHead(200, {
-    'Content-Type': 'text/javascript; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  res.end(js);
+// ── Handler estático para /mazyui-ui/* ─────────────────────────────────────
+// Serve arquivos sob ROOT/mazyui-ui/ sem aplicar renderBrand (a UI modular
+// não usa placeholders {{BRAND_*}} — cada módulo busca /api/state quando
+// precisa de dados da marca).
+function handleUiStatic(req, res, url) {
+  try {
+    // Remove o prefixo '/mazyui-ui/' para obter o subpath relativo
+    const subpath = url.pathname.slice('/mazyui-ui/'.length);
+    // Rejeita path vazio ou com segmentos suspeitos antes de resolver
+    if (!subpath) return text(res, 404, 'Não encontrado');
+    const abs = path.resolve(ROOT, 'mazyui-ui', subpath);
+    // Validação de path traversal: abs deve estar dentro de ROOT/mazyui-ui/
+    const uiRoot = path.resolve(ROOT, 'mazyui-ui');
+    if (!abs.startsWith(uiRoot + path.sep) && abs !== uiRoot) {
+      return text(res, 403, '403 Forbidden');
+    }
+    if (!fs.existsSync(abs)) return text(res, 404, 'Não encontrado');
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return text(res, 404, 'Não encontrado');
+    const ext = path.extname(abs).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    });
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) {
+    text(res, 500, String(e.message || e));
+  }
 }
 
 // Servido com onerror silencioso pelo <script> da UI — 404 quando o cliente
@@ -996,8 +1016,9 @@ function handleLocalUi(req, res) {
 
 addRoute('GET',  '/',                    handleRoot);
 addRoute('GET',  '/index.html',          handleRoot);
-addRoute('GET',  '/mazyui-ui.css',        handleUiCss);
-addRoute('GET',  '/mazyui-ui.js',         handleUiJs);
+addRoute('GET',  '/mazyui-ui/*',          handleUiStatic);   // modular UI (Onda 2)
+addRoute('GET',  '/mazyui-ui.css',        handleLegacyGone); // 410 — descontinuado
+addRoute('GET',  '/mazyui-ui.js',         handleLegacyGone); // 410 — descontinuado
 addRoute('GET',  '/local-ui.js',         handleLocalUi);
 addRoute('GET',  '/api/state',           handleState);
 addRoute('POST', '/api/save',            handleSave);
@@ -1048,9 +1069,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     for (const r of routes) {
-      if (r.method === method && r.path === p) {
-        return r.handler(req, res, url);
-      }
+      if (r.method !== method) continue;
+      const match = r.wildcard
+        ? (p === r.prefix.slice(0, -1) || p.startsWith(r.prefix))
+        : r.path === p;
+      if (match) return r.handler(req, res, url);
     }
     text(res, 404, 'Não encontrado');
   } catch (e) {

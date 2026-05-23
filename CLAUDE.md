@@ -287,3 +287,19 @@ Editou `local-*`? Reinicia o servidor pelo botão da topbar. Mudanças
 em runtime não são suportadas de propósito.
 
 ---
+
+## Painéis v2 (opcional, novo)
+
+Além do `window.Sabec.registerPanel()` v1 (preservado), existe o
+`window.Sabec.v2.registerPanel()` com lit-html e re-render reativo automático.
+
+Use v2 pra painéis novos quando puder — basta adicionar `v2: true` na def e
+declarar uma função `view(ctx)` que retorna um template lit-html. O registry
+gerencia o `subscribe`/re-render automaticamente.
+
+Painéis v1 (`local-ui.js` etc.) continuam funcionando exatamente como antes
+— não há necessidade de migrar.
+
+Detalhes completos, exemplos e checklist de portagem em `mazyui-ui/README.md`.
+
+---
